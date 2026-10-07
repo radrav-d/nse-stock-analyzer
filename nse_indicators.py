@@ -55,12 +55,8 @@ if latest_volume > latest_vol_avg:
 else:
     volume_status = "Below average"
 
-print(f"  Volume           : {volume_status}")
 recent_support = df["low"].tail(20).min()
 recent_resistance = df["high"].tail(20).max()
-
-print(f"  Support          : Rs {recent_support:8.2f}")
-print(f"  Resistance       : Rs {recent_resistance:8.2f}")
 # 8. VWAP    
 tp = (df["high"] + df["low"] + df["close"]) / 3
 df["VWAP"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum() # Note: cumulative VWAP over the full period (anchored VWAP); intraday VWAP would reset daily.
@@ -73,46 +69,29 @@ df["signal"] = (
 )
 fired_signal = df["signal"].sum() 
 
-# ---- Latest values ----
-last_close  = df["close"].iloc[-1]
+# Latest values edited 
+last_close = df["close"].iloc[-1]
 last_signal = df["signal"].iloc[-1]
-last_rsi    = df["RSI"].iloc[-1]
-last_vwap   = df["VWAP"].iloc[-1]
-last_sma    = df["SMA_20"].iloc[-1]
-last_date   = df.index[-1].date()
+last_rsi = df["RSI"].iloc[-1]
+last_vwap = df["VWAP"].iloc[-1]
+last_sma = df["SMA_20"].iloc[-1]
+last_ema = df["EMA_20"].iloc[-1]
+last_date = df.index[-1].date()
 
-trend = "Bullish (above VWAP)" if last_close > last_vwap else "Bearish (below VWAP)"
-signal_text = "YES — trend + momentum + volume aligned" if last_signal else "No"
+# VWAP trend
+vwap_trend = "Bullish (above VWAP)" if last_close > last_vwap else "Bearish (below VWAP)"
 
-# ---- Formatted report ----
-print("=" * 45)
-print(f"  {TICKER} — Technical Analysis")
-print(f"  As of {last_date}")
-print("=" * 45)
-print(f"  Close price      : Rs {last_close:>8.2f}")
-print(f"  20-day SMA       : Rs {last_sma:>8.2f}")
-print(f"  VWAP             : Rs {last_vwap:>8.2f}")
-print(f"  RSI (14)         : {last_rsi:>8.1f}")
-print("-" * 45)
-print(f"  VWAP trend       : {trend}")
-print(f"  Buy signal today : {signal_text}")
-print(f"  Signals (1 year) : {fired_signal} days")
-print("=" * 45)
-latest_close = df["close"].iloc[-1]
-latest_sma = df["SMA_20"].iloc[-1]
-latest_ema = df["EMA_20"].iloc[-1]
-latest_rsi = df["RSI"].iloc[-1]
-
-if latest_rsi > 70:
+# Momentum
+if last_rsi > 70:
     momentum = "Overbought"
-elif latest_rsi >= 50:
+elif last_rsi >= 50:
     momentum = "Positive"
-elif latest_rsi >= 30:
+elif last_rsi >= 30:
     momentum = "Weak"
 else:
     momentum = "Oversold"
 
-print(f"  Momentum         : {momentum}")
+# MACD
 latest_macd = df["MACD"].iloc[-1]
 latest_macd_signal = df["Signal"].iloc[-1]
 
@@ -123,14 +102,62 @@ elif latest_macd < latest_macd_signal:
 else:
     macd_status = "Neutral"
 
-print(f"  MACD             : {macd_status}")
-if latest_close > latest_sma and latest_close > latest_ema:
-    trend = "Bullish"
-elif latest_close < latest_sma and latest_close < latest_ema:
-    trend = "Bearish"
+# Overall trend
+if last_close > last_sma and last_close > last_ema:
+    overall_trend = "Bullish"
+elif last_close < last_sma and last_close < last_ema:
+    overall_trend = "Bearish"
 else:
-    trend = "Mixed"
-print(f"  Trend            : {trend}")
+    overall_trend = "Mixed"
+
+# Buy signal text
+signal_text = "YES — trend + momentum + volume aligned" if last_signal else "No"
+
+# Support and resistance
+recent_support = df["low"].tail(20).min()
+recent_resistance = df["high"].tail(20).max()
+
+# Volume
+latest_volume = df["volume"].iloc[-1]
+latest_vol_avg = df["vol_avg"].iloc[-1]
+
+if latest_volume > latest_vol_avg:
+    volume_status = "Above average"
+else:
+    volume_status = "Below average"
+
+
+# ---- Formatted report ----
+print("=" * 45)
+print(f"  {TICKER} — Technical Analysis")
+print(f"  As of {last_date}")
+print("=" * 45)
+
+print(f"  Close price      : Rs {last_close:>8.2f}")
+print(f"  20-day SMA       : Rs {last_sma:>8.2f}")
+print(f"  20-day EMA       : Rs {last_ema:>8.2f}")
+print(f"  VWAP             : Rs {last_vwap:>8.2f}")
+print(f"  RSI (14)         : {last_rsi:>8.1f}")
+
+print("-" * 45)
+
+print(f"  Trend            : {overall_trend}")
+print(f"  Momentum         : {momentum}")
+print(f"  MACD             : {macd_status}")
+print(f"  Volume           : {volume_status}")
+print(f"  VWAP trend       : {vwap_trend}")
+
+print("-" * 45)
+
+print(f"  Support          : Rs {recent_support:>8.2f}")
+print(f"  Resistance       : Rs {recent_resistance:>8.2f}")
+
+print("-" * 45)
+
+print(f"  Buy signal today : {signal_text}")
+print(f"  Signals (1 year) : {fired_signal} days")
+
+print("=" * 45)
 
 df.to_csv(f"{stock_name}_Indicators.csv")
 print(f"Saved full indicator table to {stock_name}_Indicators.csv")
