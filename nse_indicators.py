@@ -1,7 +1,7 @@
 import numpy as np, pandas as pd
 import yfinance as yf
 
-TICKER = "SAGILITY.NS"
+TICKER = "RELIANCE.NS"
 stock_name = TICKER.replace(".NS", "").title()
 # Download 1 year of daily NSE data and clean the columns
 df = yf.download(TICKER, period="1y", progress=False)
@@ -126,6 +126,34 @@ if latest_volume > latest_vol_avg:
 else:
     volume_status = "Below average"
 
+# ---- Technical score ----
+price_above_sma = last_close > last_sma
+price_above_ema = last_close > last_ema
+price_above_vwap = last_close > last_vwap
+rsi_positive = last_rsi >= 50
+macd_bullish = latest_macd > latest_macd_signal
+volume_above_average = latest_volume > latest_vol_avg
+
+technical_score = sum([
+    price_above_sma,
+    price_above_ema,
+    price_above_vwap,
+    rsi_positive,
+    macd_bullish,
+    volume_above_average
+])
+
+# Overall bias
+if technical_score >= 5:
+    overall_bias = "Strong Bullish"
+elif technical_score == 4:
+    overall_bias = "Bullish"
+elif technical_score == 3:
+    overall_bias = "Neutral"
+elif technical_score == 2:
+    overall_bias = "Bearish"
+else:
+    overall_bias = "Strong Bearish"
 
 # ---- Formatted report ----
 print("=" * 45)
@@ -156,8 +184,15 @@ print("-" * 45)
 
 print(f"  Buy signal today : {signal_text}")
 print(f"  Signals (1 year) : {fired_signal} days")
-
+print(f"  Technical Score  : {technical_score} / 6") # added now 
+print(f"  Overall Bias     : {overall_bias}")
 print("=" * 45)
-
+print("  Score Breakdown")
+print(f"  Price > SMA20    : {'Yes' if price_above_sma else 'No'}")
+print(f"  Price > EMA20    : {'Yes' if price_above_ema else 'No'}")
+print(f"  Price > VWAP     : {'Yes' if price_above_vwap else 'No'}")
+print(f"  RSI >= 50        : {'Yes' if rsi_positive else 'No'}")
+print(f"  MACD Bullish     : {'Yes' if macd_bullish else 'No'}")
+print(f"  Volume > Average : {'Yes' if volume_above_average else 'No'}")
 df.to_csv(f"{stock_name}_Indicators.csv")
 print(f"Saved full indicator table to {stock_name}_Indicators.csv")
