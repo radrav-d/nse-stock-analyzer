@@ -57,9 +57,12 @@ else:
 
 recent_support = df["low"].tail(20).min()
 recent_resistance = df["high"].tail(20).max()
-# 8. VWAP    
+# 8. 20-day rolling VWAP
 tp = (df["high"] + df["low"] + df["close"]) / 3
-df["VWAP"] = (tp * df["volume"]).cumsum() / df["volume"].cumsum() # Note: cumulative VWAP over the full period (anchored VWAP); intraday VWAP would reset daily.
+df["VWAP"] = (
+    (tp * df["volume"]).rolling(20).sum()
+    / df["volume"].rolling(20).sum()
+)
 
 # the combined signal 
 df["signal"] = (
@@ -164,7 +167,7 @@ print("=" * 45)
 print(f"  Close price      : Rs {last_close:>8.2f}")
 print(f"  20-day SMA       : Rs {last_sma:>8.2f}")
 print(f"  20-day EMA       : Rs {last_ema:>8.2f}")
-print(f"  VWAP             : Rs {last_vwap:>8.2f}")
+print(f"  20-day VWAP      : Rs {last_vwap:>8.2f}")
 print(f"  RSI (14)         : {last_rsi:>8.1f}")
 
 print("-" * 45)
