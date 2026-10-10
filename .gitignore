@@ -10,3 +10,5 @@ __pycache__/
 # Temporary files created by VS Code
 tempCodeRunnerFile.py
 trades.csv
+
+price_cache/
