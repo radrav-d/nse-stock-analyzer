@@ -1,1 +1,1 @@
-(1 + g.sort_values("exit_date")["net_return"]).prod() - 1
+1 + g.sort_values("exit_date")["n(et_return"]).prod() - 1
