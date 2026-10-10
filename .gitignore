@@ -1,1 +1,12 @@
 *_Indicators.csv
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Test cache
+.pytest_cache/
+
+# Temporary files created by VS Code
+/tempCodeRunnerFile.py
+trades.csv
