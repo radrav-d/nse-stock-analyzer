@@ -8,5 +8,5 @@ __pycache__/
 .pytest_cache/
 
 # Temporary files created by VS Code
-/tempCodeRunnerFile.py
+tempCodeRunnerFile.py
 trades.csv
