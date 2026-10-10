@@ -1,201 +1,203 @@
-import numpy as np, pandas as pd
-import yfinance as yf
+"""Technical analysis report for one NSE stock.
 
-TICKER = "RELIANCE.NS"
-stock_name = TICKER.replace(".NS", "").title()
-# Download 1 year of daily NSE data and clean the columns
-df = yf.download(TICKER, period="1y", progress=False)
-df.columns = [col[0] for col in df.columns]   # flatten
-df = df.rename(columns={"Open":"open", "High":"high", "Low":"low",
-                        "Close":"close", "Volume":"volume"})
+Run:  python nse_indicators.py            (analyses RELIANCE.NS)
+      python nse_indicators.py TCS.NS     (analyses any other ticker)
 
-if df.empty:
-    raise SystemExit("Download failed — check internet or ticker symbol.")
+All the indicator maths (SMA, EMA, RSI, MACD, VWAP, ATR, ADX) lives in
+indicators.py, the same file the backtester uses. That means this report and
+the backtest can never disagree about what an indicator says.
+"""
+import sys
+from datetime import date, timedelta
 
-# 1. SMA_20 
-df["SMA_20"] = df["close"].rolling(20).mean()
+import pandas as pd
 
-# 2. EMA_20 
-df["EMA_20"] = df["close"].ewm(span=20, adjust=False).mean()
+from indicators import add_indicators, load_prices, technical_score
 
-# 3. RSI   
-delta = df["close"].diff()                       # day-over-day change
-gain  = delta.clip(lower=0).rolling(14).mean()   # average of up-moves
-loss  = (-delta.clip(upper=0)).rolling(14).mean()# average of down-moves
-rs    = gain / loss
-df["RSI"] = 100 - (100 / (1 + rs))
+DEFAULT_TICKER = "RELIANCE.NS"
+HISTORY_DAYS = 730   # download about 2 years so every indicator has time to warm up
+REPORT_DAYS = 365    # the "last year" window used to count buy signals
 
-# 4. MACD + Signal 
-ema12 = df["close"].ewm(span=12, adjust=False).mean()
-ema26 = df["close"].ewm(span=26, adjust=False).mean()
-df["MACD"]      = ema12 - ema26
-df["Signal"]    = df["MACD"].ewm(span=9, adjust=False).mean()
-df["Histogram"] = df["MACD"] - df["Signal"]
+# Every column the report needs. Rows missing any of these are dropped.
+REQUIRED = ["SMA_20", "EMA_20", "RSI", "MACD", "Signal", "VWAP",
+            "vol_avg", "ADX", "Plus_DI", "Minus_DI", "ATR_14"]
 
-# 5. Bollinger BB_up / BB_low  
-mid = df["close"].rolling(20).mean()
-sd  = df["close"].rolling(20).std()
-df["BB_up"]  = mid + 2*sd
-df["BB_low"] = mid - 2*sd
 
-# 6. ATR      
-pc = df["close"].shift(1)     # previous close
-tr = pd.concat([df["high"]-df["low"],
-                (df["high"]-pc).abs(),
-                (df["low"]-pc).abs()], axis=1).max(axis=1)
-df["ATR"] = tr.rolling(14).mean()
+def get_data(ticker):
+    """Download prices and add all indicators."""
+    end = date.today() + timedelta(days=1)       # Yahoo's end date is exclusive
+    start = end - timedelta(days=HISTORY_DAYS)
+    df = load_prices(ticker, start.isoformat(), end.isoformat())
+    if df is None or df.empty:
+        raise SystemExit("Download failed - check internet or ticker symbol.")
 
-# 7. vol_avg 
-df["vol_avg"]  = df["volume"].rolling(20).mean()
-latest_volume = df["volume"].iloc[-1]
-latest_vol_avg = df["vol_avg"].iloc[-1]
+    df = add_indicators(df).dropna(subset=REQUIRED)
+    if len(df) < 30:
+        raise SystemExit("Not enough price history to calculate the indicators.")
+    return df
 
-if latest_volume > latest_vol_avg:
-    volume_status = "Above average"
-else:
-    volume_status = "Below average"
 
-recent_support = df["low"].tail(20).min()
-recent_resistance = df["high"].tail(20).max()
-# 8. 20-day rolling VWAP
-tp = (df["high"] + df["low"] + df["close"]) / 3
-df["VWAP"] = (
-    (tp * df["volume"]).rolling(20).sum()
-    / df["volume"].rolling(20).sum()
-)
+def momentum_label(rsi):
+    if rsi > 70:
+        return "Overbought"
+    if rsi >= 50:
+        return "Positive"
+    if rsi >= 30:
+        return "Weak"
+    return "Oversold"
 
-# the combined signal 
-df["signal"] = (
-    (df["close"] > df["SMA_20"]) &        # trend: uptrend
-    (df["RSI"] > 30) & (df["RSI"] < 70) & # momentum: not extreme
-    (df["volume"] > df["vol_avg"])        # volume: conviction
-)
-fired_signal = df["signal"].sum() 
 
-# Latest values edited 
-last_close = df["close"].iloc[-1]
-last_signal = df["signal"].iloc[-1]
-last_rsi = df["RSI"].iloc[-1]
-last_vwap = df["VWAP"].iloc[-1]
-last_sma = df["SMA_20"].iloc[-1]
-last_ema = df["EMA_20"].iloc[-1]
-last_date = df.index[-1].date()
+def adx_labels(adx, plus_di, minus_di):
+    if plus_di > minus_di:
+        direction = "Bullish"
+    elif minus_di > plus_di:
+        direction = "Bearish"
+    else:
+        direction = "Neutral"
 
-# VWAP trend
-vwap_trend = "Bullish (above VWAP)" if last_close > last_vwap else "Bearish (below VWAP)"
+    if adx >= 25:
+        strength = "Strong trend"
+    elif adx >= 20:
+        strength = "Developing trend"
+    else:
+        strength = "Weak trend"
+    return direction, strength
 
-# Momentum
-if last_rsi > 70:
-    momentum = "Overbought"
-elif last_rsi >= 50:
-    momentum = "Positive"
-elif last_rsi >= 30:
-    momentum = "Weak"
-else:
-    momentum = "Oversold"
 
-# MACD
-latest_macd = df["MACD"].iloc[-1]
-latest_macd_signal = df["Signal"].iloc[-1]
+def bias_label(score):
+    if score >= 5:
+        return "Strong Bullish"
+    if score == 4:
+        return "Bullish"
+    if score == 3:
+        return "Neutral"
+    if score == 2:
+        return "Bearish"
+    return "Strong Bearish"
 
-if latest_macd > latest_macd_signal:
-    macd_status = "Bullish"
-elif latest_macd < latest_macd_signal:
-    macd_status = "Bearish"
-else:
-    macd_status = "Neutral"
 
-# Overall trend
-if last_close > last_sma and last_close > last_ema:
-    overall_trend = "Bullish"
-elif last_close < last_sma and last_close < last_ema:
-    overall_trend = "Bearish"
-else:
-    overall_trend = "Mixed"
+def analyze(df):
+    """Turn the indicator table into the values and labels shown in the report."""
+    last = df.iloc[-1]
+    close = last["close"]
 
-# Buy signal text
-signal_text = "YES — trend + momentum + volume aligned" if last_signal else "No"
+    # The buy signal: uptrend + momentum not extreme + volume above average.
+    signal = ((df["close"] > df["SMA_20"])
+              & (df["RSI"] > 30) & (df["RSI"] < 70)
+              & (df["volume"] > df["vol_avg"]))
+    last_year = signal[signal.index > df.index[-1] - pd.Timedelta(days=REPORT_DAYS)]
 
-# Support and resistance
-recent_support = df["low"].tail(20).min()
-recent_resistance = df["high"].tail(20).max()
+    # The six yes/no checks behind the technical score.
+    checks = {
+        "Price > SMA20": bool(close > last["SMA_20"]),
+        "Price > EMA20": bool(close > last["EMA_20"]),
+        "Price > VWAP": bool(close > last["VWAP"]),
+        "RSI >= 50": bool(last["RSI"] >= 50),
+        "MACD Bullish": bool(last["MACD"] > last["Signal"]),
+        "Volume > Average": bool(last["volume"] > last["vol_avg"]),
+    }
 
-# Volume
-latest_volume = df["volume"].iloc[-1]
-latest_vol_avg = df["vol_avg"].iloc[-1]
+    # The score itself comes from indicators.py (the same one the backtester
+    # uses). This line double-checks it agrees with the six checks above.
+    score = int(technical_score(df).iloc[-1])
+    assert score == sum(checks.values()), "Score does not match the six checks"
 
-if latest_volume > latest_vol_avg:
-    volume_status = "Above average"
-else:
-    volume_status = "Below average"
+    if close > last["SMA_20"] and close > last["EMA_20"]:
+        trend = "Bullish"
+    elif close < last["SMA_20"] and close < last["EMA_20"]:
+        trend = "Bearish"
+    else:
+        trend = "Mixed"
 
-# ---- Technical score ----
-price_above_sma = last_close > last_sma
-price_above_ema = last_close > last_ema
-price_above_vwap = last_close > last_vwap
-rsi_positive = last_rsi >= 50
-macd_bullish = latest_macd > latest_macd_signal
-volume_above_average = latest_volume > latest_vol_avg
+    if last["MACD"] > last["Signal"]:
+        macd = "Bullish"
+    elif last["MACD"] < last["Signal"]:
+        macd = "Bearish"
+    else:
+        macd = "Neutral"
 
-technical_score = sum([
-    price_above_sma,
-    price_above_ema,
-    price_above_vwap,
-    rsi_positive,
-    macd_bullish,
-    volume_above_average
-])
+    adx_direction, adx_status = adx_labels(last["ADX"], last["Plus_DI"], last["Minus_DI"])
 
-# Overall bias
-if technical_score >= 5:
-    overall_bias = "Strong Bullish"
-elif technical_score == 4:
-    overall_bias = "Bullish"
-elif technical_score == 3:
-    overall_bias = "Neutral"
-elif technical_score == 2:
-    overall_bias = "Bearish"
-else:
-    overall_bias = "Strong Bearish"
+    return {
+        "date": df.index[-1].date(),
+        "close": close,
+        "sma": last["SMA_20"],
+        "ema": last["EMA_20"],
+        "vwap": last["VWAP"],
+        "rsi": last["RSI"],
+        "atr": last["ATR_14"],
+        "adx": last["ADX"],
+        "plus_di": last["Plus_DI"],
+        "minus_di": last["Minus_DI"],
+        "trend": trend,
+        "momentum": momentum_label(last["RSI"]),
+        "macd": macd,
+        "volume": "Above average" if checks["Volume > Average"] else "Below average",
+        "vwap_trend": "Bullish (above VWAP)" if checks["Price > VWAP"] else "Bearish (below VWAP)",
+        "adx_direction": adx_direction,
+        "adx_status": adx_status,
+        "support": df["low"].tail(20).min(),
+        "resistance": df["high"].tail(20).max(),
+        "signal_today": bool(signal.iloc[-1]),
+        "signals_year": int(last_year.sum()),
+        "score": score,
+        "bias": bias_label(score),
+        "checks": checks,
+    }
 
-# ---- Formatted report ----
-print("=" * 45)
-print(f"  {TICKER} — Technical Analysis")
-print(f"  As of {last_date}")
-print("=" * 45)
 
-print(f"  Close price      : Rs {last_close:>8.2f}")
-print(f"  20-day SMA       : Rs {last_sma:>8.2f}")
-print(f"  20-day EMA       : Rs {last_ema:>8.2f}")
-print(f"  20-day VWAP      : Rs {last_vwap:>8.2f}")
-print(f"  RSI (14)         : {last_rsi:>8.1f}")
+def print_report(ticker, r):
+    line = "=" * 45
+    dash = "-" * 45
+    print(line)
+    print(f"  {ticker} — Technical Analysis")
+    print(f"  As of {r['date']}")
+    print(line)
 
-print("-" * 45)
+    print(f"  Close price      : Rs {r['close']:>8.2f}")
+    print(f"  20-day SMA       : Rs {r['sma']:>8.2f}")
+    print(f"  20-day EMA       : Rs {r['ema']:>8.2f}")
+    print(f"  20-day VWAP      : Rs {r['vwap']:>8.2f}")
+    print(f"  RSI (14)         : {r['rsi']:>8.1f}")
+    print(f"  ATR (14)         : Rs {r['atr']:>8.2f}")
+    print(dash)
 
-print(f"  Trend            : {overall_trend}")
-print(f"  Momentum         : {momentum}")
-print(f"  MACD             : {macd_status}")
-print(f"  Volume           : {volume_status}")
-print(f"  VWAP trend       : {vwap_trend}")
+    print(f"  Trend            : {r['trend']}")
+    print(f"  Momentum         : {r['momentum']}")
+    print(f"  MACD             : {r['macd']}")
+    print(f"  Volume           : {r['volume']}")
+    print(f"  VWAP trend       : {r['vwap_trend']}")
+    print(f"  ADX (14)         : {r['adx']:>8.1f}")
+    print(f"  ADX status       : {r['adx_status']}")
+    print(f"  +DI (14)         : {r['plus_di']:>8.1f}")
+    print(f"  -DI (14)         : {r['minus_di']:>8.1f}")
+    print(f"  ADX direction    : {r['adx_direction']}")
+    print(dash)
 
-print("-" * 45)
+    print(f"  Support          : Rs {r['support']:>8.2f}")
+    print(f"  Resistance       : Rs {r['resistance']:>8.2f}")
+    print(dash)
 
-print(f"  Support          : Rs {recent_support:>8.2f}")
-print(f"  Resistance       : Rs {recent_resistance:>8.2f}")
+    signal_text = "YES — trend + momentum + volume aligned" if r["signal_today"] else "No"
+    print(f"  Buy signal today : {signal_text}")
+    print(f"  Signals (1 year) : {r['signals_year']} days")
+    print(f"  Technical Score  : {r['score']} / 6")
+    print(f"  Overall Bias     : {r['bias']}")
+    print(line)
+    print("  Score Breakdown")
+    for name, passed in r["checks"].items():
+        print(f"  {name:<17}: {'Yes' if passed else 'No'}")
 
-print("-" * 45)
 
-print(f"  Buy signal today : {signal_text}")
-print(f"  Signals (1 year) : {fired_signal} days")
-print(f"  Technical Score  : {technical_score} / 6") # added now 
-print(f"  Overall Bias     : {overall_bias}")
-print("=" * 45)
-print("  Score Breakdown")
-print(f"  Price > SMA20    : {'Yes' if price_above_sma else 'No'}")
-print(f"  Price > EMA20    : {'Yes' if price_above_ema else 'No'}")
-print(f"  Price > VWAP     : {'Yes' if price_above_vwap else 'No'}")
-print(f"  RSI >= 50        : {'Yes' if rsi_positive else 'No'}")
-print(f"  MACD Bullish     : {'Yes' if macd_bullish else 'No'}")
-print(f"  Volume > Average : {'Yes' if volume_above_average else 'No'}")
-df.to_csv(f"{stock_name}_Indicators.csv")
-print(f"Saved full indicator table to {stock_name}_Indicators.csv")
+def main():
+    ticker = sys.argv[1].upper() if len(sys.argv) > 1 else DEFAULT_TICKER
+    df = get_data(ticker)
+    print_report(ticker, analyze(df))
+
+    name = ticker.replace(".NS", "").title()
+    df.to_csv(f"{name}_Indicators.csv")
+    print(f"Saved full indicator table to {name}_Indicators.csv")
+
+
+if __name__ == "__main__":
+    main()

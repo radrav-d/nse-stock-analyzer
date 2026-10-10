@@ -5,7 +5,7 @@ Run:  python test_backtest.py
 import numpy as np
 import pandas as pd
 
-import backtest1 as backtest
+import backtest as backtest
 from indicators import add_indicators, pullback_reclaim_signal
 
 
